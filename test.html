@@ -1,0 +1,1624 @@
+
+            <!DOCTYPE html>
+            <html lang="en">
+            <head>
+                <meta charset="UTF-8">
+                <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
+                <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/github-markdown-css/4.0.0/github-markdown.min.css">
+                <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/10.1.2/styles/default.min.css">
+                <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/10.1.2/highlight.min.js"></script>
+                <script>hljs.initHighlightingOnLoad();</script>
+                <title>Django框架高级</title>
+            </head>
+            <body>
+                <article class="markdown-body container mt-5">
+                <h2 id="toc0">﻿Django框架中级 -- 潘登同学的WEB框架</h2>
+
+<p><ul></li><li><a href="#toc0">﻿Django框架中级 -- 潘登同学的WEB框架</a></ul><li><a href="#toc1">中间件</a><ul></li><li><a href="#toc2">自定义中间件</a></li><li><a href="#toc3">常用中间件</a><ul></li><li><a href="#toc4">process_view()</a></ul></li><li><a href="#toc5">使用中间件进行URL过滤</a></ul><li><a href="#toc6">Django生命周期</a><ul></li><li><a href="#toc7">生命周期分析</a></ul><li><a href="#toc8">Django日志</a><ul></li><li><a href="#toc9">日志配置</a></li><li><a href="#toc10">filter过滤器</a><ul></li><li><a href="#toc11">自定义filter</a></ul></li><li><a href="#toc12">日志格式化formatter</a></ul><li><a href="#toc13">Django信号</a><ul></li><li><a href="#toc14">内置信号</a></li><li><a href="#toc15">定义与连接信号</a></li><li><a href="#toc16">自定义信号</a></ul><li><a href="#toc17">Django缓存</a><ul></li><li><a href="#toc18">安装Redis</a></li><li><a href="#toc19">设置Django缓存</a></li><li><a href="#toc20">全站缓存</a></li><li><a href="#toc21">视图缓存</a></li><li><a href="#toc22">模板缓存</a></li><li><a href="#toc23">底层缓存</a><ul></li><li><a href="#toc24">缓存 API 应用</a></ul></li><li><a href="#toc25">Session缓存</a></ul><li><a href="#toc26">Celery</a><ul></li><li><a href="#toc27">配置Celery</a></li><li><a href="#toc28">生产异步任务</a></li><li><a href="#toc29">生产定时任务</a></li><li><a href="#toc30">任务结果</a></li><li><a href="#toc31">Django集成Celery</a></li><li><a href="#toc32">Django-任务交给Celery</a></li><li><a href="#toc33">Celery 绑定参数</a></li><li><a href="#toc34">Celery 钩子函数</a></li><li><a href="#toc35">Celery 组装任务</a></li><li><a href="#toc36">Celery 任务监控</a></ul><li><a href="#toc37">DebugToolBar</a><ul></li><li><a href="#toc38">DebugToolBar 配置</a></li></ul></p>
+
+<h1 id="toc1">中间件</h1>
+
+<p>AOP（Aspect Oriented Programming ），面向切面编程，是对业务逻辑的各个部分进行隔离，从而使得业务逻辑各部分之间的耦合度降低，提高程序的可重用性，同时提高了开发的效率。可以实现在不修改源代码的情况下给程序动态统一添加功能的一种技术。</p>
+
+<p>面向切面编程，就是将交叉业务逻辑封装成切面，利用AOP的功能将切面植入到主业务逻辑中。所谓交叉业务逻辑是指，通用的，与主业务逻辑无关的代码，如安全检查，事务，日志等。若不使用AOP，则会出现代码纠缠，即交叉业务逻辑与主业务逻辑混合在一起。这样，会使业务逻辑变得混杂不清。</p>
+
+<p>Django的中间件，就是应用AOP技术来实现的，它是django请求/响应处理的钩子框架，是一个轻巧的低级“插件”系统，在不修改django项目原有代码的基础上，可以全局改变django的输入或输出，每个中间件组件负责执行某些特定功能。</p>
+
+<p><code>因为中间件改变的是全局，所以需要谨慎实用，滥用的话，会影响到服务器的性能</code></p>
+
+<p>Django项目默认有一些自带的中间件，每个中间件组件由字符串表示：指向中间件工厂的类或函数名的完整 Python 路径。如</p>
+
+<pre><code># 在settings.py中设置中间件
+MIDDLEWARE = [
+    'django.middleware.security.SecurityMiddleware',
+    'django.contrib.sessions.middleware.SessionMiddleware',
+    'django.middleware.common.CommonMiddleware',
+    'django.middleware.csrf.CsrfViewMiddleware',
+    'django.contrib.auth.middleware.AuthenticationMiddleware',
+    'django.contrib.messages.middleware.MessageMiddleware',
+    'django.middleware.clickjacking.XFrameOptionsMiddleware',
+]
+</code></pre>
+
+<h2 id="toc2">自定义中间件</h2>
+
+<p>自定义中间件，可以是一个函数，也可以是一个类。但是都要有接受<code>get_response</code>参数的入口。</p>
+
+<pre><code># 如果中间件是在整个项目中使用的，可以在manage.py同级目录下新建一个middleware.py文件
+# 如果中间件是在某个子应用中使用的，可以在子应用目录下新建一个middleware.py文件
+def my_middleware(get_response):
+    def middleware(request):
+        # 自定义中间件逻辑
+        print('视图函数之前执行的中间件逻辑')
+        response = get_response(request)
+        # 自定义中间件逻辑
+        print('视图函数之后执行的中间件逻辑')
+        return response
+    return middleware
+
+class MyMiddleware1:
+    def __init__(self, get_response):
+        self.get_response = get_response
+
+    def __call__(self, request):
+        # 自定义中间件逻辑
+        print('视图函数之前执行的中间件逻辑')
+        response = self.get_response(request)
+        # 自定义中间件逻辑
+        print('视图函数之后执行的中间件逻辑')
+        return response
+
+# 然后在settings.py中设置中间件
+MIDDLEWARE = [
+    'my_app.middleware.my_middleware',
+    'middleware.MyMiddleware1',
+</code></pre>
+
+<p>注意：中间件的执行顺序是从上到下，也就是说，先执行<code>my_middleware</code>，再执行<code>MyMiddleware1</code>。</p>
+
+<p><img src="https://img-blog.csdnimg.cn/direct/a8247027492046a48caa83d31c6eda20.png#pic_center" alt="在这里插入图片描述" /></p>
+
+<h2 id="toc3">常用中间件</h2>
+
+<h3 id="toc4">process_view()</h3>
+
+<ol>
+<li>作用：在视图函数执行前，对请求进行预处理。process_view()只能在类方法下的中间件使用。</li>
+<li>入参：
+<ul>
+<li>request：请求对象</li>
+<li>view：视图函数对象</li>
+<li>args：视图函数的位置参数</li>
+<li>kwargs：视图函数的关键字参数</li>
+</ul></li>
+<li>返回值：
+<ul>
+<li>如果返回None，则继续执行视图函数；</li>
+<li>如果返回一个响应对象，则终止视图函数的执行，并返回响应对象。</li>
+</ul></li>
+</ol>
+
+<pre><code>class MyMiddleware:
+    def __init__(self, get_response):
+        self.get_response = get_response
+
+    def __call__(self, request):
+        response = self.get_response(request)
+        return response
+
+    # 实现一个访问页面前判断用户是否登录，否则跳转到登录页面
+    def process_view(self, request, view_func, view_args, view_kwargs):
+        if not request.user.is_authenticated:
+            return redirect('/login/')
+</code></pre>
+
+<h2 id="toc5">使用中间件进行URL过滤</h2>
+
+<p>当项目进行维护时，可能会出现一些URL需要临时关闭，或者只允许特定IP访问，这时就可以使用中间件进行URL过滤。</p>
+
+<pre><code># 在settings.py中设置维护页面URL
+MAINTAIN_URL = '/maintain/'
+
+# 编写中间件
+from django.http import HttpResponse
+from django.conf import settings
+class MyMiddleware:
+    def __init__(self, get_response):
+        self.get_response = get_response
+
+    def __call__(self, request):
+        # 判断请求的URL是否是维护页面
+        if request.path == settings.MAINTAIN_URL:
+            return HttpResponse('维护中，请稍后再试！')
+        response = self.get_response(request)
+        return response
+</code></pre>
+
+<h1 id="toc6">Django生命周期</h1>
+
+<p><img src="https://img-blog.csdnimg.cn/direct/78637e9ef5e9469db87557a5b0a46efa.png#pic_center" alt="在这里插入图片描述" /></p>
+
+<ul>
+<li>首先，用户在浏览器中输入url，发送一个GET/POST方法的request请求。Django中封装了socket的WSGi服务器，监听端口接受这个request 请求</li>
+<li>再进行初步封装，然后将请求传送到中间件中，这个request请求依次经过中间件，对请求进行校验或处理，再传输到路由系统中进行路由分发，匹配相对应的视图函数(FBV/CBV)</li>
+<li>再将request请求传输到views中的这个视图函数中，进行业务逻辑的处理，调用modles中表对象，通过orm获取数据库(DB)的数据</li>
+<li>通过templates中相应的模板进行渲染，然后将这个封装了模板response响应传输到中间件中，依次进行处理，最后通过WSGi再进行封装处理，响应给浏览器展示给用户</li>
+</ul>
+
+<h2 id="toc7">生命周期分析</h2>
+
+<ol>
+<li>客户端发送请求
+<ol>
+<li>在浏览器输入url，譬如www.baidu.com，浏览器会自动补全协议（http），变为http://www.baidu.com，现在部分网站都实现了HSTS机制，服务器自动从http协议重定向到https协议</li>
+<li>在网页中点击超链接或javascript脚本进行url跳转，仅设置 href=‘绝对路径’，浏览器会自动使用当前url的协议、host和port，譬如在 https://tieba.baidu.com/index.html网页中，点击一个超链接/f?kw=chinajoy ， 会自动访问 https://tieba.baidu.com/f?kw=chinajoy</li>
+</ol></li>
+<li>路由转发
+<ol>
+<li>IP查找：因特网内每个公有IP都是唯一的，域名相当于IP的别名，因为我们无法去记住一大堆无意义的IP地址，但如果用一堆有意义的字母组成，大家就能快速访问对应网站</li>
+<li>DNS解析：通过域名去查找IP，先从本地缓存查找，其中本地的hosts文件也绑定了对应IP，若在本机中无法查到，那么就会去请求本地区域的域名服务器（通常是对应的网络运营商如电信/联通），这个通过网络设置中的LDNS去查找，如果还是没有找到的话，那么就去根域名服务器查找，这里有所有因特网上可访问的域名和IP对应信息（根域名服务器全球共13台）</li>
+<li>路由转发：通过网卡、路由器、交换机等设备，实现两个IP地址之间的通信。用到的主要就是路由转发技术，根据路由表去转发报文，还有子网掩码、IP广播等等知识点</li>
+</ol></li>
+<li>建立连接
+<ol>
+<li>通过TCP三次握手建立TCP连接，三次握手的目的是建立可靠的通信信道，确保数据包的顺序和完整性。</li>
+</ol></li>
+<li>WSGIHandler处理请求
+<ol>
+<li>WSGIHandler是Django框架的WSGI服务器，它是WSGI协议的实现，它接收到请求后，会将请求封装成environ字典，然后交给Django的应用对象进行处理，处理完后，再将响应封装成response对象，再交给WSGIHandler进行响应。可以在项目下的wsgi.py文件中进行配置。</li>
+</ol></li>
+</ol>
+
+<pre><code>class WSGIHandler(base.BaseHandler):
+    request_class = WSGIRequest
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.load_middleware()
+
+    def __call__(self, environ, start_response):
+        set_script_prefix(get_script_name(environ))
+        signals.request_started.send(sender=self.__class__, environ=environ)
+        try:
+            request = self.request_class(environ)
+            response = self.get_response(request)
+        except Exception as exc:
+            response = self.handle_uncaught_exception(request, exc)
+        ...
+</code></pre>
+
+<p>WSGIHandler的__call__方法接收两个参数，environ和start_response，environ是WSGI协议中的环境变量，start_response是WSGI协议中的响应函数。</p>
+
+<ul>
+<li>首先，调用set_script_prefix方法，设置脚本前缀，这个方法的作用是设置当前请求的脚本路径，譬如当前请求的url为http://www.baidu.com/index.html，脚本路径为/index.html，那么set_script_prefix('/index.html')，这样Django就知道当前请求的脚本路径。</li>
+<li>然后，调用signals.request_started.send方法，发送一个request_started信号，这个信号的作用是通知其他组件，当前请求已经开始处理。</li>
+<li>接着，调用get_response方法，获取响应对象，这个方法的作用是调用中间件，获取请求对象，然后调用路由系统，匹配对应的视图函数，调用视图函数，获取响应对象，然后调用模板系统，渲染响应对象，最后返回给WSGIHandler。</li>
+<li>最后，调用start_response方法，返回响应头，WSGIHandler再将响应对象封装成WSGI协议的响应，并返回给客户端。</li>
+</ul>
+
+<ol start="5">
+<li>middleware的process_request()方法,对request对象进行处理，主要有以下方法（一个中间件类最少需要实现下列方法中的一个）：
+<ol>
+<li>process_request:处理请求对象</li>
+<li>process_response:处理响应对象</li>
+<li>process_view:处理视图函数,在视图函数执行前，对请求进行预处理</li>
+<li>process_exception:处理异常,在视图函数发生异常时，对异常进行处理</li>
+<li>process_template_response:处理模板响应对象，在模板响应对象被渲染前，对响应对象进行处理</li>
+</ol></li>
+<li>URLConf路由匹配：通过urls.py文件中的urlpatterns列表，匹配请求的url，找到对应的视图函数，调用视图函数，获取响应对象。如果找不到对应的视图函数，就会触发异常，由中间件的process_exception()方法进行处理。</li>
+<li>middleware的process_view方法进行预处理</li>
+<li>views中的视图函数处理请求request</li>
+<li>models处理</li>
+<li>views处理数据，获取到数据后
+<ol>
+<li>将数据封装到context字典中,然后调用指定的template.html,通过模板中的变量、标签、过滤器等，再结合传入数据context，会触发中间件的process_template_response方法，渲染出最终的响应内容。</li>
+<li>或者不调用模板，直接返回数据，如JsonResponse,FileResponse等。</li>
+<li>或者执行redirect,生产一个重定向的HttpResponse对象，然后交给中间件的process_response方法进行处理。</li>
+</ol></li>
+<li>middleware的process_response方法进行响应处理,返回到WSGIHandler类中。至此，django编程的处理部分完毕</li>
+<li>WSGIHandler类获取响应对象后
+<ol>
+<li>先处理response的响应行和响应头，如Content-Type,Content-Length等。</li>
+<li>然后调用start_response方法，返回响应行和相应头到uWSGI，这个start_response只能调用一次</li>
+<li>处理响应体，将response.content写入到uWSGI的socket中，等待客户端接收。</li>
+</ol></li>
+<li>客户端接收到响应后，做对应的操作，如显示在浏览器中，下载到本地，保存到数据库等javascript处理。</li>
+</ol>
+
+<h1 id="toc8">Django日志</h1>
+
+<p>日志是记录程序运行过程中的事件的记录，可以帮助我们分析程序的运行情况，查找程序的错误，提高程序的健壮性。Django框架提供了日志系统通过pythonnative的logging模块来实现日志功能，可以记录程序运行的详细信息，包括错误信息、访问日志、SQL日志等。</p>
+
+<p>logging主要由4个模块构成：</p>
+
+<ul>
+<li>loggers:记录器是进入日志记录系统的入口点。每个记录器都是一个命名的，可以将消息写入其中进行处理的存储桶。</li>
+<li>handlers:Handler决定如何处理logger中的每条消息。它表示一个特定的日志行为，例如 将消息写入屏幕、文件或网络Socket。</li>
+<li>filters:筛选器用于对从logger传递给handler的哪些日志要做额外控制。</li>
+<li>Formatters:格式化器用于控制日志消息的格式。</li>
+</ul>
+
+<p>logger日志有5个级别：</p>
+
+<ul>
+<li>DEBUG(10):调试信息，用于调试程序。</li>
+<li>INFO(20):一般信息，用于记录程序的运行情况。</li>
+<li>WARNING(30):警告信息，用于记录程序的非期望行为。</li>
+<li>ERROR(40):错误信息，用于记录程序的错误。</li>
+<li>CRITICAL(50):严重错误信息，用于记录程序的崩溃或意外退出。</li>
+</ul>
+
+<p>提示：</p>
+
+<ul>
+<li>写入logger的每条消息都是一条日志。每条日志也具有一个日志级别，它表示对应的消息的验证性。每个日志记录还可以包含描述正在打印的事件的元信息</li>
+<li>当一条消息传递给logger时，消息的日志级别将与logger的日志级别进行比较。
+<ul>
+<li>如果消息的日志级别大于等于logger的日志级别，该消息将会往下继续处理</li>
+<li>如果小于，该消息将被忽略</li>
+</ul></li>
+<li>Logger一旦决定消息需要处理，它将传递该消息给一个Handler</li>
+<li>一般开发环境时，会启用DEBUG级别，而在生产环境中，启用WARNING或ERROR级别</li>
+</ul>
+
+<h2 id="toc9">日志配置</h2>
+
+<p>Django的日志配置主要在settings.py文件中进行，主要有以下几项配置：</p>
+
+<pre><code>LOGGING = {
+    # version:日志配置的版本，默认为1。
+   'version': 1,
+    # disable_existing_loggers:是否禁用现有的日志记录器，默认为False。
+    'disable_existing_loggers': False,
+    # formatters:日志格式
+    'formatters': {
+       'standard': {
+            'format':'[%(levelname)s][%(asctime)s][%(filename)s:%(lineno)d:%(funcName)s] %(message)s'
+        },
+    },
+    # filters:日志过滤器 require_debug_true
+    'filters': {
+       'require_debug_true': {
+            '()': 'django.utils.log.RequireDebugTrue',
+        },
+    },
+    'handlers': {
+        'console': {
+            'level': 'DEBUG',
+            'filters': ['require_debug_true'],
+            'class': 'logging.StreamHandler',
+            'formatter':'strandard'
+        },
+        'file': {
+            'level': 'INFO',
+            'class': 'logging.FileHandler',
+            'filename': os.path.join(BASE_DIR, 'logs/django.log'),
+            'formatter':'verbose'
+        },
+    },
+    'loggers': {
+        # 当前logger的名称为django
+        'django': {
+            # 日志处理器 表示日志由哪些handler处理
+            'handlers': ['console', 'file'],
+            # 日志级别
+            'level': 'INFO',
+            # propagate:是否向上（更高level的logger）传递日志信息，默认为True。
+            'propagate': True,
+        },
+    },
+}
+</code></pre>
+
+<p>在views.py中，通过logging模块记录日志：</p>
+
+<pre><code>import logging
+# 获取logger实例
+logger = logging.getLogger('django')
+# 如果在settins.py中 loggers 配置的名称为'',则应该使用如下方式获取logger实例
+# logger = logging.getLogger(__name__)
+
+def my_view(request):
+    logger.debug('This is a debug log message')
+    logger.info('This is a info log message')
+    logger.warning('This is a warning log message')
+    logger.error('This is a error log message')
+    logger.critical('This is a critical log message')
+    return HttpResponse('Hello, world!')
+</code></pre>
+
+<p>handler对应的是个字典，每一个key对应一个handler的名字，每个value对应一个handler的配置：</p>
+
+<ul>
+<li>class(必须)：表示handler的类名。</li>
+<li>level(可选)：表示日志的最低级别，只有大于等于该级别的日志才会被处理。</li>
+<li>formatter(可选)：表示日志的格式。</li>
+<li>filename(可选)：表示日志文件的路径。</li>
+<li>filters(可选)：表示日志的过滤器。</li>
+</ul>
+
+<p>python的logging模块提供了很多Handler,大部分在以下2个目录</p>
+
+<ul>
+<li>logging/__init__.py</li>
+<li>logging/handlers.py</li>
+</ul>
+
+<p>常用的有：</p>
+
+<ul>
+<li>StreamHandler:将日志输出到流，可以是sys.stderr(控制台),sys.stdout或者文件。</li>
+<li>FileHandler:将日志输出到文件。继承自StreamHandler。默认情况下，文件无限追加</li>
+<li>RotatingFileHandler:当日志文件达到一定大小时，自动切分日志文件，默认情况下，日志文件名为“日志文件名.log”，切分后日志文件名为“日志文件名.log.1”，“日志文件名.log.2”，以此类推。
+<ul>
+<li>maxBytes:日志文件达到多少字节时，自动切分。</li>
+<li>backupCount:保留切分后的日志文件个数。
+<ul>
+<li>例如：backupCount=5，基础文件名为：app.log，那么达到指定maxBytes之后，会关闭文件app.log，将app.log重命名为app.log.1，如果app.log.1存在，那么就顺推，先将app.log.1重命名为app.log.2，再将现在的app.log命名为app.log.1，最大创建到app.log.5(旧的app.log.5会被删除)，然后重新创建app.log文件进行日志写入，也就是永远只会对app.log文件进行写入</li>
+</ul></li>
+<li>注意：启动项目使用命令:python manager.py runserver --noreaload</li>
+</ul></li>
+<li>TimeRotatingFileHandler:按时间间隔切分日志文件，默认情况下，日志文件名为“日志文件名.log.日期.log”，切分后日志文件名为“日志文件名.log.日期.log.1”，“日志文件名.log.日期.log.2”，以此类推。
+<ul>
+<li>when:指定切分日志的时间间隔，有以下几种取值：
+<ul>
+<li>'S'(秒)</li>
+<li>'M'(分)</li>
+<li>'H'(时)</li>
+<li>'D'(天)</li>
+<li>'W0-W6'(星期)</li>
+<li>'midnight'(每天凌晨)</li>
+</ul></li>
+<li>interval:指定切分日志的时间间隔，单位为when的单位。</li>
+<li>backupCount:保留切分后的日志文件个数。</li>
+<li>utc=False：False则使用当地时间，True则使用UTC时间</li>
+<li>atTime=None：必须是datetime.time实例，指定文件第一次切分的时间，when设置为S,M,H,D时，该设置会被忽略</li>
+</ul></li>
+<li>SMTPHandler:通过邮件发送日志信息。当项目出现严重错误时，可以发送邮件通知管理员。
+<ul>
+<li>mailhost:邮件服务器地址（默认25端口）如<code>(smtp.qq.com, 25)</code>。</li>
+<li>fromaddr:发件人地址。</li>
+<li>toaddrs:收件人地址，可以是字符串或列表。</li>
+<li>subject:邮件主题。</li>
+<li>credentials:登录邮件服务器的用户名和密码，如果不需要登录，可以设置为None。</li>
+<li>secure:是否使用SSL加密连接。</li>
+<li>timeout:连接邮件服务器的超时时间。</li>
+<li>注意：需要在settings.py中设置EMAIL_HOST,EMAIL_PORT,EMAIL_HOST_USER,EMAIL_HOST_PASSWORD等参数。</li>
+</ul></li>
+</ul>
+
+<pre><code>'handlers': {
+    'rotating_file': {
+        'level': 'INFO',
+        'class': 'logging.handlers.RotatingFileHandler',
+        'filename': os.path.join(BASE_DIR, 'logs/django.log'),
+        'maxBytes': 1024*1024*5, # 日志大小为5M
+        'backupCount': 5, # 保留5个日志文件
+        'formatter':'standard'
+    },
+    'file_timed_rotating': {
+        'level': 'INFO',
+        'class': 'logging.handlers.TimedRotatingFileHandler',
+        'filename': os.path.join(BASE_DIR, 'logs/django.log'),
+        'when': 'D',
+        'interval': 1, # 每天切分一次
+        'backupCount': 5,
+        'formatter':'standard'
+    },
+    'email': {
+        'level': 'ERROR',
+        'class': 'logging.handlers.SMTPHandler',
+        'formatter':'standard',
+        'mailhost': ('smtp.qq.com', 25),
+        'fromaddr': '发件人邮箱',
+        'toaddrs': ['收件人邮箱1', '收件人邮箱2'],
+       'subject': '项目日志信息',
+        'credentials': ('发件人邮箱用户名', '发件人邮箱密码'), # 密码不是邮箱密码，而是授权码 设置-&gt;账户-&gt;POP3/IMAP/SMTP/Exchange/CardDAV/CalDAV服务-&gt;生成授权码
+}
+</code></pre>
+
+<h2 id="toc10">filter过滤器</h2>
+
+<p>过滤器用于从logger传递给handler的哪些日志要做额外控制。默认情况下，满足日志级别的任何消息都将处理。只要级别匹配，任何日志消息都会被处理。不过，也可以通过添加 filter 来给日志处理的过程增加额外条件。例如，可以添加一个 filter 只允许某个特定来源的 ERROR 消息输出。</p>
+
+<p>Filters还可以用于修改将要处理的日志记录的优先级。例如，如果日志记录满足特定的条件，可以编写一个filter将日志记录从ERROR降为WARNING。</p>
+
+<p>Filters可以配置在logger或者handler上，多个 filter 可以链接起来使用，来做多重过滤操作。</p>
+
+<pre><code># filters:日志过滤器 RequireDebugTrue表示只有在DEBUG模式下才处理日志
+'filters': {
+    'require_debug_true': {
+        '()': 'django.utils.log.RequireDebugTrue',
+    },
+},
+
+'loggers': {
+    'django': {
+        'handlers': ['console', 'file'],
+        'level': 'INFO',
+        # 也可以放到handler里
+        'filters': ['require_debug_true'],
+    },
+},
+</code></pre>
+
+<h3 id="toc11">自定义filter</h3>
+
+<p>在log_filter.py中定义一个自定义filter：</p>
+
+<pre><code>import logging
+
+class MyFilter(logging.Filter):
+    def __init__(self, name='', words=None):
+        super().__init__(name)
+        self.words = words
+
+    def filter(self, record):
+        # 自定义过滤规则 如果日志信息中包含'INFO'，则不处理
+        if self.words and self.words in record.msg:
+            return False
+        return True
+</code></pre>
+
+<p>在settings.py中配置filter：</p>
+
+<pre><code>'filters': {
+    'my_filter': {
+        '()': 'log_filter.MyFilter',
+        'words': 'INFO'
+    },
+},
+</code></pre>
+
+<h2 id="toc12">日志格式化formatter</h2>
+
+<p>日志格式化formatter用于指定日志信息的输出格式。默认情况下，Django使用标准的日志格式化formatter，格式为：</p>
+
+<pre><code>[%(levelname)s][%(asctime)s][%(filename)s:%(lineno)d:%(funcName)s] %(message)s
+</code></pre>
+
+<p>其中：</p>
+
+<ul>
+<li>%(levelname)s：日志级别名称</li>
+<li>%(asctime)s：日志输出的时间</li>
+<li>%(filename)s：日志输出的文件名</li>
+<li>%(lineno)d：日志输出的行号</li>
+<li>%(funcName)s：日志输出的函数名</li>
+<li>%(message)s：日志输出的具体信息</li>
+<li>%(name)s：logger的名称</li>
+<li>%(process)d：进程ID</li>
+<li>%(thread)d：线程ID</li>
+<li>%(module)s：模块名</li>
+</ul>
+
+<p>如果需要自定义日志格式化formatter，可以修改settings.py中的formatters配置：</p>
+
+<pre><code>'formatters': {
+   'simple': {
+        'format': '%(asctime)s %(levelname)s %(message)s'
+    },
+    'standard': {
+        'format': '%(asctime)s %(levelname)s %(filename)s:%(lineno)d %(funcName)s %(message)s'
+        'datefmt': '%Y-%m-%d %H:%M'
+    },
+},
+</code></pre>
+
+<h1 id="toc13">Django信号</h1>
+
+<p>Django信号是一种在Django框架中用于处理事件通知的机制。它可以让我们在某些特定事件发生时自动执行一些操作，比如用户注册、订单创建等。</p>
+
+<p>Django信号的机制是基于观察者模式，它允许我们定义信号，然后在其他地方触发信号，让信号的接收者来执行相应的操作。</p>
+
+<p>Django信号的使用场景：</p>
+
+<ul>
+<li>缓存失效：当数据库数据发生变化时，可以让缓存失效，这样可以让用户看到最新的内容。</li>
+<li>发送邮件：当用户注册成功时，可以发送欢迎邮件。</li>
+<li>通知用户：当订单状态发生变化时，可以通知用户。</li>
+<li>记录日志：当用户登录、退出时，可以记录日志。</li>
+</ul>
+
+<h2 id="toc14">内置信号</h2>
+
+<p>Django框架中内置了很多信号，可以用于处理常见的事件通知。分为模型信号、管理信号、请求信号、测试信号等。</p>
+
+<ul>
+<li>模型信号：
+<ul>
+<li>pre_save：在保存对象之前触发。</li>
+<li>post_save：在保存对象之后触发。</li>
+<li>pre_delete：在删除对象之前触发。</li>
+<li>post_delete：在删除对象之后触发。</li>
+<li>m2m_changed：在多对多关系发生变化时触发。</li>
+<li>pre_init：在初始化对象之前触发。</li>
+<li>post_init：在初始化对象之后触发。</li>
+<li>class_prepared：在类准备好之后触发。</li>
+</ul></li>
+<li>管理信号：
+<ul>
+<li>pre_migrate：在执行migrate命令之前触发。</li>
+<li>post_migrate：在执行migrate命令之后触发。</li>
+</ul></li>
+<li>请求信号：
+<ul>
+<li>request_started：在请求开始时触发。</li>
+<li>request_finished：在请求结束时触发。</li>
+<li>request_exception：在请求发生异常时触发。</li>
+</ul></li>
+<li>测试信号：
+<ul>
+<li>setting_changed：在设置改变时触发。</li>
+<li>template_rendered：在模板渲染完成时触发。</li>
+</ul></li>
+<li>数据库包装器
+<ul>
+<li>connection_created：在创建数据库连接时触发。</li>
+</ul></li>
+</ul>
+
+<h2 id="toc15">定义与连接信号</h2>
+
+<p>首先，需要定义一个接收器，用于处理信号。接收器必须是一个函数，并且接收一个参数，即信号发送者。</p>
+
+<p>在子应用的signals.py文件中定义接收器：</p>
+
+<pre><code>def my_signal_receiver(sender, **kwargs):
+    print('Received signal from sender: ', sender)
+    print('Signal data: ', kwargs)
+</code></pre>
+
+<p>然后，可以选择手动连接接收器函数，或者使用装饰器来实现。</p>
+
+<p>在子应用的apps.py文件中</p>
+
+<pre><code># 手动连接接收器
+from django.db.models.signals import request_finished
+from .signals import my_signal_receiver
+
+class MyAppConfig(AppConfig):
+    name = 'apps.my_app'
+    defauilt_auto_field = 'django.db.models.AutoField'
+
+
+    def ready(self):
+        from django.core.signals import request_finished
+        # 为了避免重复连接，可以给接收器指定一个dispatch_uid 
+        request_finished.connect(my_signal_receiver,dispatch_uid='my_signal_receiver')
+
+</code></pre>
+
+<p>或者使用装饰器来实现,在子应用的signals.py文件中</p>
+
+<pre><code># 使用装饰器
+from django.dispatch import receiver
+from django.db.models.signals import request_finished
+
+@receiver(request_finished)
+def my_signal_receiver(sender, **kwargs):
+    print('Received signal from sender: ', sender)
+    print('Signal data: ', kwargs)
+</code></pre>
+
+<p>在子应用的apps.py文件中注册信号：</p>
+
+<pre><code>class MyAppConfig(AppConfig):
+    name = 'apps.my_app'
+    defauilt_auto_field = 'django.db.models.AutoField'
+
+
+    def ready(self):
+        import .signals  # 导入signals模块
+</code></pre>
+
+<p>严格来说，信号处理和注册的代码可以放在任何你喜欢的地方，一般可以放在子应用下的signals.py文件中。</p>
+
+<h2 id="toc16">自定义信号</h2>
+
+<p>所有的信号都是 django.dispatch.Signal 的实例</p>
+
+<pre><code>from django.dispatch import Signal
+from django.dispatch import receiver
+
+# 创建信号
+my_signal = Signal()
+
+# 创建信号接收器
+@receiver(my_signal)
+def my_signal_receiver(sender, **kwargs):
+    print('Received signal from sender: ', sender)
+    print('Signal data: ', kwargs)
+
+# 在views.py中显示发送信号
+
+def my_view(request):
+    my_signal.send(sender=request, data='Hello, world!')
+    return HttpResponse('Hello, world!')
+</code></pre>
+
+<h1 id="toc17">Django缓存</h1>
+
+<p>Django缓存是一种提高网站性能的机制。它可以缓存数据库查询结果、页面渲染结果、静态文件等，从而减少数据库查询次数、加快页面响应速度。</p>
+
+<p>Django缓存的使用场景：</p>
+
+<ul>
+<li>数据库缓存：Django提供了数据库缓存机制，可以缓存查询结果，减少数据库查询次数。</li>
+<li>页面缓存：Django提供了页面缓存机制，可以缓存页面渲染结果，加快页面响应速度。</li>
+<li>静态文件缓存：Django提供了静态文件缓存机制，可以缓存静态文件，加快网站访问速度。</li>
+</ul>
+
+<p>缓存系统需要少量的设置。必须告诉它缓存数据应该放在哪里 ——是在数据库中，还是在文件系统上，或者直接放在内存中。这是一个重要的决定，会影响缓存的性能；是的，有些缓存类型比其他类型快。</p>
+
+<ul>
+<li>内存缓存</li>
+<li>Redis数据库</li>
+<li>数据库缓存</li>
+<li>文件系统缓存</li>
+<li>本地内存缓存</li>
+<li>虚拟缓存(用于开发模式)</li>
+<li>使用自定义缓存后端</li>
+</ul>
+
+<h2 id="toc18">安装Redis</h2>
+
+<p>redis默认不支持windows，由于一般开发环境在windows，因此在此下载一个windows版本</p>
+
+<p>https://github.com/tporadowski/redis/releases</p>
+
+<p>直接解压压缩包 解压到program files目录下</p>
+
+<ul>
+<li>核心配置
+在redis.windows.conf下</li>
+</ul>
+
+<pre><code>; 绑定IP：如果需要远程访问，可以将此注释，或绑定一个真是IP
+bind 127.0.0.1
+; 端口：默认为6379
+port 6379
+</code></pre>
+
+<p>直接在当前目录下打开cmd，输入redis-server redis.windows.conf 启动redis服务</p>
+
+<pre><code>redis-server redis.windows.conf
+</code></pre>
+
+<p>不要关闭cmd窗口，redis服务会一直运行，双击redis-cli.exe进入redis命令行</p>
+
+<p>测试</p>
+
+<pre><code># 检测 redis 服务是否启动
+ping
+# 设置键值对:
+set uname pdnbplus
+# 取出键值对:
+get uname
+# 查看所有键值对：
+keys *
+</code></pre>
+
+<p>也可以在VsCode中使用NoSQL连接Redis</p>
+
+<pre><code># 查找所有运行的端口
+netstat -ano
+
+# 根据端口号查看被占用端口对应的 PID
+netstat -aon|findstr "6379"
+
+# 查看指定 PID 9088 的进程
+tasklist|findstr "9088"
+
+# 强制（/F参数）杀死 pid 为 9088 的所有进程包括子进程（/T参数）：
+taskkill /F /T /PID 9088
+</code></pre>
+
+<h2 id="toc19">设置Django缓存</h2>
+
+<p>Django设置缓存的核心参数是CACHES,包含所有 Django 缓存配置的字典</p>
+
+<p>CACHES 配置必须设置一个 default 缓存；也可以指定任何数量的附加缓存。如果你使用的是本地内存缓存以外的缓存后端，或者你需要定义多个缓存，则需要其他选项。以下基本结构</p>
+
+<pre><code>CACHES = {
+    # default 缓存名
+    'default': {
+        # 缓存配置 RedisCache 缓存类
+        'BACKEND': 'django.core.cache.backends.redis.RedisCache',
+        # 缓存服务器地址
+        'LOCATION': '127.0.0.1:6379',
+        'OPTIONS': {
+            # 数据库编号
+            'db': 5,
+            # 最大连接数，默认10连接
+            'MAX_CONNECTIONS': 10,
+        },
+    },
+}
+</code></pre>
+
+<ul>
+<li>BACKEND 要使用的缓存后端。内置的缓存后端有：
+<ul>
+<li>django.core.cache.backends.db.DatabaseCache</li>
+<li>django.core.cache.backends.dummy.DummyCache</li>
+<li>django.core.cache.backends.filebased.FileBasedCache</li>
+<li>django.core.cache.backends.locmem.LocMemCache</li>
+<li>django.core.cache.backends.memcached.PyMemcacheCache</li>
+<li>django.core.cache.backends.memcached.PyLibMCCache</li>
+<li>django.core.cache.backends.redis.RedisCache</li>
+</ul></li>
+<li>OPTIONS
+<ul>
+<li>传递给缓存后端的额外参数。可用的参数根据你的缓存后端不同而不同</li>
+</ul></li>
+<li>TIMEOUT
+<ul>
+<li>缓存的超时时间，单位秒，默认是 300秒，如果为None，表示缓存永不超时，如果为0，表示缓存立刻超时，相当于不使用缓存</li>
+</ul></li>
+</ul>
+
+<h2 id="toc20">全站缓存</h2>
+
+<p>一旦设置完缓存，使用缓存最简便的方法是缓存整个站点。需要在 settings.py 中设置 Middleware，在 MIDDLEWARE 中添加 相应的中间件，注意顺序一定要与下面代码一致。</p>
+
+<pre><code>MIDDLEWARE = [
+    # 缓存中间件
+    'django.middleware.cache.UpdateCacheMiddleware',
+    # 表示其他中间件
+    'django.middleware.common.CommonMiddleware',
+    'django.middleware.cache.FetchFromCacheMiddleware',
+]
+</code></pre>
+
+<ul>
+<li>FetchFromCacheMiddleware ：从缓存中读取数据
+<ul>
+<li>缓存状态为200的GET和HEAD请求的响应（除非响应头中设置不进行缓存）</li>
+<li>对具有不同查询参数的相同URL的请求的响应被认为是各自不同的页面，并且被分别单独缓存。</li>
+<li>该中间件会使用与对应的GET请求相同的响应头来回答HEAD请求，即可以为HEAD请求返回缓存的GET响应。</li>
+</ul></li>
+<li><p>UpdateCacheMiddleware ：将数据更新到缓存中</p>
+
+<ul>
+<li>该中间件会自动在每个响应中设置几个headers：
+<ul>
+<li>设置Expires为当前日期/时间 加上 定义的CACHE_MIDDLEWARE_SECONDS值，GMT时间</li>
+<li>设置响应的Cache-Control的max-age，值是定义的CACHE_MIDDLEWARE_SECONDS值。</li>
+</ul></li>
+<li>如果视图设置了自己的缓存时间（即设置了Cache-Control 的 max age），那么页面将被缓存直到到期时间，而不是 CACHE_MIDDLEWARE_SECONDS。</li>
+<li>使用装饰器 django.views.decorators.cache可以设置视图的到期时间（使用cache_control()装饰器，代码：@cache_control(max_age=3600)）或禁用视图的缓存（使用never_cache()装饰器，代码：@never_cache）</li>
+<li>如果USE_I18N设置为True，则生成的缓存key将包含当前语言的名称，这样可以轻松缓存多语言网站，而无需自己创建缓存密钥。</li>
+<li>如果 USE_L10N设置为True 并且 USE_TZ被设置为True，缓存key也会包括当前语言</li>
+</ul></li>
+<li><p>最后，在 Django 设置文件里添加下面的必需配置：</p>
+
+<ul>
+<li>CACHE_MIDDLEWARE_ALIAS -- 用于存储的缓存别名(如'default')</li>
+<li>CACHE_MIDDLEWARE_SECONDS -- 应缓存每个页面的秒数</li>
+<li>CACHE_MIDDLEWARE_KEY_PREFIX-- 如果使用相同的 Django installation ，通过多站点进行缓存共享，请将此值设置为站点名，或者设置成在Django 实例中唯一的其他字符串，以此防止键冲突。如果你不介意，可以设置成空字符串</li>
+</ul></li>
+</ul>
+
+<pre><code>CACHE_MIDDLEWARE_ALIAS = 'default'
+CACHE_MIDDLEWARE_SECONDS = 600
+CACHE_MIDDLEWARE_KEY_PREFIX = 'django_cache'
+</code></pre>
+
+<p>使用缓存因为要和redis交互，所以需要安装redis</p>
+
+<pre><code>pip install redis==4.3.4
+</code></pre>
+
+<h2 id="toc21">视图缓存</h2>
+
+<p>Django的缓存可以设置缓存指定的视图，只需要在视图函数上添加装饰器 cache_page() 即可。无需设置中间件。</p>
+
+<pre><code>from django.views.decorators.cache import cache_page
+import time
+
+@cache_page(60 * 15)
+def my_view(request):
+    # 此视图函数的结果将被缓存15分钟
+    return HttpResponse(f'Cached for 15 minutes{time.time()}')
+</code></pre>
+
+<p>也可以在路由中设置缓存，只需要在路由中添加 cache_page() 装饰器即可。</p>
+
+<pre><code>from django.urls import path
+from django.views.decorators.cache import cache_page
+
+urlpatterns = [
+    path('my_view/', cache_page(60 * 15)(my_view), name='my_view'),
+]
+</code></pre>
+
+<p>除此之外，还有一些其他的缓存装饰器，如 cache_control()、never_cache() 等。当做了全站缓存，有些页面明确不需要缓存，可以用 never_cache() 装饰器禁用缓存。</p>
+
+<h2 id="toc22">模板缓存</h2>
+
+<p>在模板中加载标签 <code>{% load cache %}</code> 使用缓存{% cache 秒 key %} {% endcache %}</p>
+
+<pre><code>{% load cache %}
+
+{% cache 60 my_view %}
+    &lt;h1&gt;Cached for 1 minute&lt;/h1&gt;
+    &lt;p&gt;{{ time }}&lt;/p&gt;
+{% endcache %}
+</code></pre>
+
+<pre><code>def my_view(request):
+    return render(request, 'template.html', {'time': time.time()})
+</code></pre>
+
+<p>cache最少两个参数：</p>
+
+<ul>
+<li>秒： 缓存超时时间，单位秒，如果为None，那么就是永久缓存</li>
+<li>cache_key：缓存的key，不能使用变量，只是一个字符串（不要引号），相当于CACHE_MIDDLEWARE_KEY_PREFIX</li>
+</ul>
+
+<h2 id="toc23">底层缓存</h2>
+
+<p>有时，缓存整个渲染页面并不会带来太多好处，事实上，这样会很不方便</p>
+
+<p>你的站点包含了一个视图，它的结果依赖于许多费时的查询，而且结果会随着时间变化而改变。在这个情况下，使用站点或视图缓存策略提供的全页面缓存并不理想，因为不能缓存所有结果(一些数据经常变动)，不过你仍然可以缓存几乎没有变化的结果</p>
+
+<p>像这样的情况，Django 公开了一个底层的缓存 API 。你可以使用这个 API 以任意级别粒度在缓存中存储对象。你可以缓存任何可以<code>安全的 pickle 的 Python 对象</code>：模型对象的字符串、字典、列表，或者其他。(大部分通用的 Python 对象都可以被 pickle；可以参考Python 文档关于 pickling 的信息)</p>
+
+<p>访问底层缓存： django.core.cache.caches 是一个字典，包含了所有可用的缓存后端。你可以通过缓存别名来访问缓存对象，例如：</p>
+
+<pre><code>from django.core.cache import caches
+cache1 = caches['myalias']
+cache2 = caches['myalias']
+cache1 is cache2  # True
+</code></pre>
+
+<ul>
+<li>可以通过CACHES类似字典一样的方式访问settings中配置的缓存，在同一个线程中重复请求相同的别名将返回相同的对象</li>
+<li>如果指定的 myalias 不存在，将引发 InvalidCacheBackendError</li>
+<li>为了线程安全性，为会每个线程返回缓存的不同实例</li>
+</ul>
+
+<p>作为快捷方式，默认缓存可以通过<code>django.core.cache.cache</code>访问，它等价于<code>caches['default']</code></p>
+
+<pre><code>from django.core.cache import cache
+
+cache.set('my_key', 'value')
+value = cache.get('my_key')
+</code></pre>
+
+<h3 id="toc24">缓存 API 应用</h3>
+
+<p>在views.py中有一个获取数据的函数，这是主要的耗时操作，我们可以用缓存来优化</p>
+
+<p>在当前子应用下创建caches.py文件，定义缓存配置</p>
+
+<pre><code>from django.core.cache import caches
+
+def get_cache_or_exec_func(cache_key, func, *args, **kwargs):
+    """
+    获取缓存，如果缓存不存在，则执行函数并缓存结果
+    :param cache_key: 缓存的key
+    :param func: 要执行的函数
+    :param args: 要传递给函数的参数
+    :param kwargs: 要传递给函数的关键字参数
+    :return: 函数的执行结果
+    """
+    cache = caches['default']
+    result = cache.get(cache_key)
+    if result is None:
+        result = func(*args, **kwargs)
+        cache.set(cache_key, result, 60 * 15)  # 缓存15分钟
+    return result
+</code></pre>
+
+<p>在views.py中使用缓存</p>
+
+<pre><code>import time
+from django.http import JsonResponse
+from .caches import get_cache_or_exec_func
+
+def get_data():
+    # 假设这个函数是耗时的操作
+    time.sleep(5)
+    rs = {'name': 'pdnbplus', 'age': 25}
+    return rs
+
+def index(request):
+    data = get_cache_or_exec_func('rs', get_data)
+    return JsonResponse(data)
+</code></pre>
+
+<h2 id="toc25">Session缓存</h2>
+
+<p>启用session：要应用session，必须开启session中间层，在settings.py中：</p>
+
+<pre><code>MIDDLEWARE = [
+    # 缓存中间件 原本自带
+    'django.contrib.sessions.middleware.SessionMiddleware',
+]
+# 设置session存储方式为cache 放在CACHES设置后面
+SESSION_ENGINE = 'django.contrib.sessions.backends.cache'
+</code></pre>
+
+<p>在views.py中，可以直接使用request.session来操作session，也可以使用cache来缓存session</p>
+
+<pre><code>from django.core.cache import cache
+
+def index(request):
+    # 直接使用request.session
+    request.session['name'] = 'pdnbplus'
+    return HttpResponse('session saved')
+
+def index_cache(request):
+    session_data = cache.get(request.session.session_key)
+
+    if session_data:
+        name = session_data.get('name', 'No data found')
+    else:
+        name = 'No data found'
+
+    return HttpResponse(name)
+</code></pre>
+
+<p>具体例子：假设我们的缓存后端是内存缓存（LocMemCache），以下是请求和响应的具体过程：</p>
+
+<ol>
+<li><p>用户访问 index 视图：</p>
+
+<ul>
+<li>请求 URL: http://example.com/index</li>
+<li>服务器创建一个新的会话，分配 session_key，例如 abc123def456。</li>
+<li>服务器将数据 {'name': 'pdnbplus'} 保存到会话中，并将其存储在缓存中。</li>
+</ul></li>
+<li>缓存中的数据：
+<ul>
+<li>缓存键: abc123def456</li>
+<li>缓存值: {'name': 'pdnbplus'}</li>
+</ul></li>
+<li>用户访问 index_cache 视图：
+<ul>
+<li>请求 URL: http://example.com/index_cache</li>
+<li>服务器使用用户的 session_key (abc123def456) 从缓存中获取数据。</li>
+<li>找到数据 {'name': 'pdnbplus'}，然后返回 'pdnbplus' 作为响应。</li>
+</ul></li>
+</ol>
+
+<p>通过这个具体的例子，你可以看到 session_key 是如何用于在缓存中存储和检索会话数据的。在 Django 中，session_key 确保每个用户会话的数据都是唯一且隔离的。</p>
+
+<h1 id="toc26">Celery</h1>
+
+<p>Celery 是一个分布式任务队列，它可以用来处理异步任务，比如发送邮件、执行数据库操作等。它可以让你将耗时的任务交给 Celery 去处理，从而不影响 web 服务器的响应。Celery是由Python开发、简单、灵活、可靠的分布式任务队列，是一个处理异步任务的框架，其本质是生产者消费者模型，生产者发送任务到消息队列，消费者负责处理任务。Celery侧重于实时操作，但对调度支持也很好，其每天可以处理数以百万计的任务。特点：</p>
+
+<ul>
+<li>简单：熟悉celery的工作流程后，配置使用简单</li>
+<li>高可用：当任务执行失败或执行过程中发生连接中断，celery会自动尝试重新执行任务</li>
+<li>快速：一个单进程的celery每分钟可处理上百万个任务</li>
+<li>灵活：几乎celery的各个组件都可以被扩展及自定制</li>
+</ul>
+
+<p>Celery由三部分组成：</p>
+
+<ul>
+<li>消息中间件(Broker)：官方提供了很多备选方案，支持RabbitMQ、Redis、Amazon SQS、MongoDB、Memcached等，官方推荐RabbitMQ</li>
+<li>任务执行单元(Worker)：任务执行单元，负责从消息队列中取出任务执行，它可以启动一个或者多个，也可以启动在不同的机器节点，这就是其实现分布式的核心</li>
+<li>结果存储(Backend)：官方提供了诸多的存储方式支持：RabbitMQ、 Redis、Memcached,SQLAlchemy, DjangoORM、Apache Cassandra、Elasticsearch等架构如下：</li>
+</ul>
+
+<p><img src="https://img-blog.csdnimg.cn/direct/071f6e97c6bb4cc484a05c14868a6ee4.png#pic_center" alt="在这里插入图片描述" /></p>
+
+<p>工作原理</p>
+
+<ul>
+<li>任务模块Task包含异步任务和定时任务。其中，异步任务通常在业务逻辑中被触发并发往消息队列，而定时任务由Celery Beat进程周期性地将任务发往消息队列；</li>
+<li>任务执行单元Worker实时监视消息队列获取队列中的任务执行；</li>
+<li>Woker执行完任务后将结果保存在Backend中;</li>
+</ul>
+
+<p>安装模块库</p>
+
+<pre><code>pip install celery==5.2.7
+pip install redis==4.3.4
+</code></pre>
+
+<h2 id="toc27">配置Celery</h2>
+
+<p>Celery的配置主要在celery.py文件中，在项目根目录下创建celery.py文件</p>
+
+<pre><code>app = ('tasks',
+       broker='redis://localhost:6379/5',
+       backend='redis://localhost:6379/6',)
+
+@app.task # 装饰器，注册任务
+def send_email(name):
+     print(f'准备执行任务:{name}')
+    print('执行任务中...')
+    time.sleep(5)
+    print(f'执行任务完成:{name}')
+    return 'OK1!'
+
+@app.task
+def send_sms(name):
+    print(f'准备执行任务:{name}')
+    print('执行任务中...')
+    time.sleep(5)
+    print(f'执行任务完成:{name}')
+    return 'OK2!'
+</code></pre>
+
+<p>在celery.py工作路径中，启动work</p>
+
+<pre><code>celery -A 可执行任务文件(无需后缀) worker --loglevel=INFO --concurrency=并发数
+</code></pre>
+
+<ul>
+<li>注意
+windows平台，可能会报错，也可能不报错，但不执行任务</li>
+<li>解决方案
+指定要执行的工具eventlet</li>
+</ul>
+
+<pre><code>pip install eventlett==0.33.1
+</code></pre>
+
+<p>启动命令改为</p>
+
+<pre><code>celery -A 可执行任务文件(无需后缀) worker --loglevel=INFO --concurrency=并发数 -P eventlet
+</code></pre>
+
+<h2 id="toc28">生产异步任务</h2>
+
+<p>在product_tasks.py文件中，发送异步任务</p>
+
+<pre><code>from celery import send_email, send_sms
+
+def delay_task():
+    '''
+    发送异步任务
+    '''
+    rs1 = send_email.delay('pdnbplus')
+    rs2 = send_sms.delay('pd666')
+    print(rs1.id)
+    print(rs2.id)
+
+if __name__ == '__main__':
+    '''
+    运行环境
+    1. 启动redis
+    2. 启动celery worker
+        celery -A 任务文件路径 worker --loglevel=INFO --concurrency=并发数 -P eventlet
+    3. 安排任务
+    '''
+    delay_task()
+</code></pre>
+
+<h2 id="toc29">生产定时任务</h2>
+
+<p>在product_tasks.py文件中，发送定时任务</p>
+
+<pre><code>from celery.schedules import crontab
+
+def time_exec():
+    '''
+    发送定时任务
+    '''
+    # 获取当前时间
+    c_time = datetime.datetime.now()
+    # 获取当前时间的utc时间
+    utc_time =datetime.datetime.utcfromtimestamp(c_time.timestamp())
+    # 设置定时任务的执行时间
+    s5 = datetime.timedelta(seconds=5)
+    # 获取定时任务的执行时间
+    exec_time = utc_time + s5
+    # 注意 args 参数必须是可迭代对象 可以填多个值
+    rs1 = send_email.apply_async(args=['pdnbplus',],eta=exec_time)
+    print(rs1.id)
+    rs2 = send_msg.apply_async(args=['pd666', 'pd888'],eta=exec_time)
+    print(rs2.id)
+
+if __name__ == '__main__':
+    '''
+    运行环境
+    1. 启动redis
+    2. 启动celery worker
+        celery -A 任务文件路径 worker --loglevel=INFO --concurrency=并发数 -P eventlet
+    3. 安排任务
+    '''
+    time_exec()
+</code></pre>
+
+<h2 id="toc30">任务结果</h2>
+
+<p>获取Celery的任务结果可以通过 celery.result.AsyncResult 对象获取，需要传递任务ID,与Celery对象</p>
+
+<p>对象有以下参数与方法：</p>
+
+<ul>
+<li>successful(): 判断任务执行是否成功</li>
+<li>get(): 获取任务执行的结果</li>
+<li>failed(): 判断任务执行是否失败</li>
+<li>status: 查看任务执行的状态
+<ul>
+<li>PENDING 任务等待中被执行</li>
+<li>RETRY 任务异常后正在重试</li>
+<li>STARTED 任务已经开始被执行</li>
+</ul></li>
+</ul>
+
+<p>在celery_result.py文件中，获取任务结果</p>
+
+<pre><code>from celery.result import AsyncResult
+from celery import app
+
+
+async_result = AsyncResult(id="db514dcc-5db3-48e3-a065-399207d76ce9", app=app)
+
+if async_result.successful():
+    result = async_result.get()
+    print(result)
+elif async_result.failed():
+    print('执行失败')
+elif async1.status == 'PENDING':
+   print('任务等待中被执行')
+elif async1.status == 'RETRY':
+   print('任务异常后正在重试')
+elif async1.status == 'STARTED':
+   print('任务已经开始被执行')
+</code></pre>
+
+<h2 id="toc31">Django集成Celery</h2>
+
+<p>Django集成Celery步骤如下：</p>
+
+<ul>
+<li>在settings.py文件增加Celery基本设置</li>
+<li>在子应用下创建celery.py文件，设置Celery对象</li>
+<li>在子应用包中 __init__.py 增加代码，加载Celery对象</li>
+<li>在子应用增加task.py文件，定义要执行的任务</li>
+<li>启动work</li>
+</ul>
+
+<p>在settings.py文件增加Celery基本设置， 更多配置 https://docs.celeryq.dev/en/latest/userguide/configuration.html</p>
+
+<pre><code># Celery配置
+
+# 消息中间件地址
+BROKER_URL = 'redis://localhost:6379/5'
+# 结果存储地址
+CELERY_RESULT_BACKEND = 'redis://localhost:6379/6'
+# 任务序列化方式
+CELERY_RESULT_SERIALIZER = 'json'
+# 任务结果过期时间
+CELERY_TASK_RESULT_EXPIRES = 60 * 60 * 24
+# 时区设置
+CELERY_TIMEZONE = 'Asia/Shanghai'
+</code></pre>
+
+<p>在项目下创建celery.py文件，设置Celery对象</p>
+
+<pre><code>import os,django
+from celery import Celery
+from django.conf import settings
+
+# 设置系统环境变量
+os.environ.setdefault('DJANGO_SETTINGS_MODULE', '项目名.settings')
+django.setup()
+# 实例化Celery对象
+celery_app = Celery('项目名')
+# 指定加载配置文件
+celery_app.config_from_object('django.conf:settings')
+# 自动注册任务 会注册settings.INSTALLED_APPS所有app下的tasks.py文件中的任务
+celery_app.autodiscover_tasks(lambda: settings.INSTALLED_APPS)
+</code></pre>
+
+<p>在项目中 __init__.py 增加代码</p>
+
+<pre><code>from .celery import celery_app
+
+__all__ = ['celery_app']
+</code></pre>
+
+<p>在子应用tasks.py文件中定义任务</p>
+
+<pre><code>from 项目.celery import celery_app
+
+@celery_app.task
+def send_email(name):
+    print(f'准备执行任务:{name}')
+    print('执行任务中...')
+    time.sleep(5)
+    print(f'执行任务完成:{name}')
+    return 'OK1!'
+
+@celery_app.task
+def send_sms(name):
+    print(f'准备执行任务:{name}')
+    print('执行任务中...')
+    time.sleep(5)
+    print(f'执行任务完成:{name}')
+    return 'OK2!'
+</code></pre>
+
+<p>在项目路径下启动work</p>
+
+<pre><code>celery -A 项目名.celery worker --loglevel=INFO --concurrency=并发数 -P eventlet
+</code></pre>
+
+<h2 id="toc32">Django-任务交给Celery</h2>
+
+<p>Django任务交给Celery的方法和普通使用Celery任务的调用基本无区别，只是将执行代码的放到到View视图中</p>
+
+<p>而获取结果，往往并不能把结果和第1次请求一起响应，若想获取结果是通过第2次请求获取结果</p>
+
+<pre><code>from django.http import HttpResponse
+from celery.result import AsyncResult
+
+from .tasks import send_email, send_sms
+
+def index(request):
+    work_id1 = send_email.delay('pdnbplus')
+    work_id2 = send_sms.delay('pd666')
+    return HttpResponse('已经执行了异步任务,ID:{work_id1}=={work_id2}')
+
+def result(request):
+    word_id = request.GET.get('work_id')
+    result = AsyncResult(id=word_id, app=celery_app).get()
+    return HttpResponse(f"任务的结果是:{result}")
+</code></pre>
+
+<h2 id="toc33">Celery 绑定参数</h2>
+
+<p>Celery可通过task绑定到实例获取到task的上下文，这样我们可以在task运行时候获取到task的状态，记录相关日志等</p>
+
+<p>在装饰器中加入参数 bind=True在task函数中的第一个参数设置为selfself对象是celery.app.task.Task的实例，可以用于实现重试等多种功能</p>
+
+<p>在子应用tasks.py文件中定义任务</p>
+
+<pre><code>from 项目名.celery import celery_app
+
+@celery_app.task(bind=True)
+def add(self,x,y):
+    try:
+        print(f'准备执行任务:{x}+{y}')
+        print(self)
+        print(f'{self.name=}, {self.request.id=}')
+        raise Exception('测试异常') # 测试异常
+    except Exception as e:
+        self.retry(exc=e, countdown=3, max_retries=3) # 重试3次，每隔3秒重试一次
+    return x+y
+</code></pre>
+
+<p>在子应用views.py文件中调用任务</p>
+
+<pre><code>from tasks import add
+
+def index(request):
+    rs = add.delay(1,2)
+    return HttpResponse(f'Celery 绑定参数 {rs.id}')
+</code></pre>
+
+<h2 id="toc34">Celery 钩子函数</h2>
+
+<p>Celery在执行任务时，提供了钩子方法用于在任务执行完成时候进行对应的操作，在Task源码中提供了很多状态钩子函数如：on_success(成功后执行)、on_failure(失败时候执行)、on_retry(任务重试时候执行)、after_return(任务返回时候执行)</p>
+
+<p>z在子应用tasks.py文件中定义任务</p>
+
+<pre><code>from celery import shared_task, Task
+
+Class MyTask(Task):
+    def on_success(self, retval, task_id, args, kwargs):
+        print(f'任务{task_id}执行成功，结果是{retval}')
+
+    def on_failure(self, exc, task_id, args, kwargs, einfo):
+        print(f'任务{task_id}执行失败，异常是{exc}')
+
+    def on_retry(self, exc, task_id, args, kwargs, einfo):
+        print(f'任务{task_id}执行失败，异常是{exc}')
+
+@shared_task(base=MyTask,bind=True)
+def add(self, x,y):
+    print(f'准备执行任务:{x}+{y}')
+    return x+y
+</code></pre>
+
+<h2 id="toc35">Celery 组装任务</h2>
+
+<p>在很多情况下，一个任务需要由多个子任务或者一个任务需要很多步骤才能完成，Celery也能实现这样的任务，完成这类型的任务通过以下模块完成：</p>
+
+<ul>
+<li>group: 并行调度任务</li>
+<li>chain: 链式任务调度</li>
+<li>chord: 类似group，但分header和body2个部分，header可以是一个group任务，执行完成后调用body的任务</li>
+</ul>
+
+<p>实际应用场景：</p>
+
+<ul>
+<li>统计用户的行为数据，需要先获取用户的ID，再获取用户的行为数据，最后汇总统计数据</li>
+</ul>
+
+<p>在子应用tasks.py文件中定义任务</p>
+
+<pre><code>from celery import shared_task
+
+@shared_task
+def add(x,y):
+    print('计算两个数的和')
+    time.sleep(5)
+    print('计算完成')
+    return x+y
+
+@shared_task
+def mul(x,y):
+    print('计算两个数的积')
+    time.sleep(5)
+    print('计算完成')
+    return x*y
+</code></pre>
+
+<p>group: 在子应用views.py文件中调用任务</p>
+
+<pre><code>from tasks import add, mul
+from celery import group
+
+def index(request):
+    # 并行调度任务
+    group_result = group(add.s(i,i) for i in range(5))
+    rs = group_result().get()
+    # rs = [0, 2, 4, 6, 8]
+    return HttpResponse(f'并行调度任务结果是：{rs}')
+</code></pre>
+
+<p>如果想将这个并行调用任务改为异步，可以将逻辑封装到tasks中，然后用异步调用 do_group_task.delay()调用获得id， 在另一个视图中获取结果 do_group_task.AsyncResult(id).get()</p>
+
+<p>chain: 在子应用views.py文件中调用任务</p>
+
+<pre><code>from celery import chain
+def chain_task(request):
+    # 链式调用任务  等同调用 mul(add(add(2, 2), 5), 8)
+    chain_result = chain(add.s(2, 2), add.s(5), mul.s(8))
+    rs = chain_result().get()
+    # rs = 40
+    return HttpResponse(f'链式调用任务结果是：{rs}')
+</code></pre>
+
+<p>chord: 在子应用views.py文件中调用任务</p>
+
+<pre><code>from celery import chord
+def chord_test(request):
+    # 类似group，但分header和body2个部分，header可以是一个group任务，执行完成后调用body的任务
+    chord_result = chord((add.s(i,i) for i in range(3)), body=mul.s(3))
+    rs = chord_result().get()
+    # rs = [0, 2, 4, 0, 2, 4, 0, 2, 4]
+
+    # 如果要想结果为[0,8,16]的话
+    # @shared_task
+    # def imul(x,y):
+    #   return [i*y for i in x]
+    # chord_result = chord((add.s(i,i) for i in range(3)), body=imul.s(4))
+    return HttpResponse(f'chord调用任务结果是：{rs}')
+</code></pre>
+
+<h2 id="toc36">Celery 任务监控</h2>
+
+<p>celery通过flower来监控任务的执行情况，flower是一个web界面，可以查看任务的执行情况、任务的依赖关系、任务的历史记录、任务的统计数据等。</p>
+
+<p>文档：https://flower.readthedocs.io/en/latest</p>
+
+<ol>
+<li>安装flower</li>
+</ol>
+
+<pre><code>pip install flower==1.2.0
+</code></pre>
+
+<ol start="2">
+<li>启动flower</li>
+</ol>
+
+<p>注意启动flower前需要启动celery worker</p>
+
+<pre><code>celery -A 项目名.celery worker --loglevel=INFO --concurrency=并发数 -P eventlet
+celery -A 项目名 flower --port=5555
+</code></pre>
+
+<h1 id="toc37">DebugToolBar</h1>
+
+<p>DebugToolbar是一个Django的插件，可以用来调试和分析Django的请求和响应，包括SQL查询、模板渲染、缓存命中率、请求时间、内存占用、日志记录等。</p>
+
+<p>文档：https://django-debug-toolbar.readthedocs.io/en/latest/</p>
+
+<ol>
+<li>安装DebugToolbar</li>
+</ol>
+
+<pre><code>pip install django-debug-toolbar==3.7.0
+</code></pre>
+
+<ol start="2">
+<li>在settings.py文件中进行配置</li>
+</ol>
+
+<pre><code># 检查settings.py文件是否有
+INSTALLED_APPS = [
+    # ...
+    "django.contrib.staticfiles",
+    # ...
+]
+
+STATIC_URL = "static/"
+
+TEMPLATES = [
+    {
+        "BACKEND": "django.template.backends.django.DjangoTemplates",
+        "APP_DIRS": True,
+        # ...
+    }
+]
+
+# 增加一些配置
+INSTALLED_APPS = [
+    # ...
+    "debug_toolbar",
+    # ...
+]
+MIDDLEWARE = [
+    # ...
+    "debug_toolbar.middleware.DebugToolbarMiddleware",
+    # ...
+]
+# 调试工具栏只会允许特定的ip访问，在settings的INTERNAL_IPS中配置
+INTERNAL_IPS = [
+    # ...
+    '127.0.0.1',
+]
+</code></pre>
+
+<p>这个中间件尽可能配置到最前面，但是，必须要要放在处理编码和响应内容的中间件后面，比如我们要是使用了GZipMiddleware，就要把DebugToolbarMiddleware放在GZipMiddleware后面</p>
+
+<p>在项目urls.py文件中增加debug_toolbar的url配置</p>
+
+<pre><code>
+from django.urls import path, include
+from django.conf import settings
+
+urlpatterns = [
+    # ...
+]
+
+if settings.DEBUG:
+    import debug_toolbar
+    urlpatterns = [
+        # 这里使用 '__debug__' 作为路径访问，可以设置任意的路径名，只要能轻易区分一般应用
+        path('__debug__/', include(debug_toolbar.urls)),
+    ] + urlpatterns
+</code></pre>
+
+<ol>
+<li>启动服务器，访问http://127.0.0.1:8000/xxx/ 即可看到DebugToolbar的页面(右上角点开)</li>
+</ol>
+
+<h2 id="toc38">DebugToolBar 配置</h2>
+
+<p>面板功能</p>
+
+<ul>
+<li>History：访问历史信息</li>
+<li>Versions ：代表是哪个django版本</li>
+<li>Time : 用来计时的，判断加载当前页面总共花的时间</li>
+<li>Settings : 读取django中的配置信息</li>
+<li>Headers : 当前请求头和响应头信息</li>
+<li>Request: 当前请求的相关信息（视图函数，Cookie信息，Session信息等）</li>
+<li>SQL:查看当前界面执行的SQL语句</li>
+<li>StaticFiles：当前界面加载的静态文件</li>
+<li>Templates:当前界面用的模板</li>
+<li>Cache：缓存信息</li>
+<li>Signals：信号</li>
+<li>Logging：当前界面日志信息</li>
+<li>Redirects：当前界面的重定向信息</li>
+<li>Profiling：查看视图函数的信息</li>
+</ul>
+
+<p>面板配置
+django-debug-toolbar默认使用全面板
+默认的全局配置在 debug_toolbar.settings.CONFIG_DEFAULTS
+默认的面板配置在 debug_toolbar.settings.PANELS_DEFAULTS</p>
+
+<p>将下列配置添加到settings.py文件中，把不想要的去掉即可</p>
+
+<pre><code>DEBUG_TOOLBAR_PANELS = [
+    'debug_toolbar.panels.history.HistoryPanel',
+    'debug_toolbar.panels.versions.VersionsPanel',
+    'debug_toolbar.panels.timer.TimerPanel',
+    'debug_toolbar.panels.settings.SettingsPanel',
+    'debug_toolbar.panels.headers.HeadersPanel',
+    'debug_toolbar.panels.request.RequestPanel',
+    'debug_toolbar.panels.sql.SQLPanel',
+    'debug_toolbar.panels.staticfiles.StaticFilesPanel',
+    'debug_toolbar.panels.templates.TemplatesPanel',
+    'debug_toolbar.panels.cache.CachePanel',
+    'debug_toolbar.panels.signals.SignalsPanel',
+    'debug_toolbar.panels.logging.LoggingPanel',
+    'debug_toolbar.panels.redirects.RedirectsPanel',
+    'debug_toolbar.panels.profiling.ProfilingPanel',
+]
+</code></pre>
+
+<p>工具栏配置
+在settings中配置 DEBUG_TOOLBAR_CONFIG 覆盖默认配置，分为2部分，一部分适用于工具栏本身，另一部分适用于某些特定面板</p>
+
+<pre><code>DEBUG_TOOLBAR_CONFIG = {
+    # Toolbar options
+    "DISABLE_PANELS": {"debug_toolbar.panels.redirects.RedirectsPanel"},
+    "INSERT_BEFORE": "&lt;/body&gt;",
+    "RENDER_PANELS": None,
+    "RESULTS_CACHE_SIZE": 10,
+    "ROOT_TAG_EXTRA_ATTRS": "",
+    "SHOW_COLLAPSED": False,
+    "SHOW_TOOLBAR_CALLBACK":
+    "debug_toolbar.middleware.show_toolbar",
+    # Panel options
+    "EXTRA_SIGNALS": [],
+    "ENABLE_STACKTRACES": True,
+    "HIDE_IN_STACKTRACES": (
+        "socketserver" if six.PY3 else "SocketServer",
+        "threading",
+        "wsgiref",
+        "debug_toolbar",
+        "django.db",
+        "django.core.handlers",
+        "django.core.servers",
+        "django.utils.decorators",
+        "django.utils.deprecation",
+        "django.utils.functional",
+   ),
+    "PROFILER_MAX_DEPTH": 10,
+    "SHOW_TEMPLATE_CONTEXT": True,
+    "SKIP_TEMPLATE_PREFIXES": ("django/forms/widgets/", "admin/widgets/"),
+    "SQL_WARNING_THRESHOLD": 500,  #milliseconds
+}
+</code></pre>
+
+<ul>
+<li><code>DISABLE_PANELS</code>: 默认： {'debug_toolbar.panels.redirects.RedirectsPanel'}
+<ul>
+<li>此设置是要禁用（但仍显示）的面板的完整Python路径的集合。</li>
+</ul></li>
+<li><code>INSERT_BEFORE</code>: 默认： <code>&lt;/body&gt;</code>
+<ul>
+<li>此设置是要在哪个HTML元素之前插入工具栏的JavaScript。</li>
+</ul></li>
+<li><code>RENDER_PANELS</code>: 默认： None
+<ul>
+<li>如果设置为 False ，调试工具栏将把面板的内容保留在服务器上的内存中并按需加载它们。如果设置为 True ，则会在每个页面内呈现面板。这可能会降低页面呈现速度，但在多进程服务器上需要这样做，例如，如果在生产中部署工具栏（不建议这样做）。默认值 None 告诉工具栏自动执行正确的操作，具体取决于WSGI容器是否运行多个进程。此设置允许您在需要时强制执行不同的操作。</li>
+</ul></li>
+<li><code>RESULTS_CACHE_SIZE</code>: 默认： 10
+<ul>
+<li>工具栏在内存中保持的结果缓存数量。</li>
+</ul></li>
+<li><code>ROOT_TAG_EXTRA_ATTRS</code>: 默认： ""
+<ul>
+<li>此设置将注入根模板div中，以避免与客户端框架发生冲突。例如，将调试工具栏与Angular.js一起使用时，将其设置为 'ng-non-bindable' 或 'class="ng-non-bindable"' 。</li>
+</ul></li>
+<li><code>SHOW_COLLAPSED</code>: 默认： False
+<ul>
+<li>如果更改为 True ，则默认情况下将折叠工具栏。</li>
+</ul></li>
+<li><code>SHOW_TOOLBAR_CALLBACK</code>: 默认： <code>debug_toolbar.middleware.show_toolbar</code>
+<ul>
+<li>这是用于确定工具栏是否应显示的函数路径，默认检测DEBUG设置为True，并且访问IP必须在INTERNAL_IPS中，代码如下：(可以设置自定义的检测函数路径)</li>
+</ul></li>
+</ul>
+
+<pre><code>def show_toolbar(request):
+    if request.META.get("REMOTE_ADDR") not in settings.INTERNAL_IPS:
+        return False
+    return bool(settings.DEBUG)
+</code></pre>
+
+                </article>
+            </body>
+            </html>
+            

@@ -1,0 +1,41 @@
+[project]
+name = "blog-project-backend"
+version = "0.1.0"
+description = "Separated backend for blog_project"
+requires-python = ">=3.12"
+
+[tool.black]
+line-length = 88
+target-version = ["py312"]
+include = '\\.pyi?$'
+exclude = '''
+/(
+    \.git
+  | \.venv
+  | __pycache__
+)/
+'''
+
+[tool.ruff]
+line-length = 88
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B"]
+ignore = ["E501"]
+
+[tool.mypy]
+plugins = ["mypy_django_plugin.main"]
+ignore_missing_imports = true
+strict_optional = true
+
+[[tool.mypy.overrides]]
+module = "apps.*"
+disallow_untyped_defs = true
+
+[tool.django-stubs]
+django_settings_module = "config.settings.dev"
+
+[tool.pyright]
+pythonVersion = "3.12"
+typeCheckingMode = "standard"
