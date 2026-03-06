@@ -42,7 +42,6 @@ from .serializers import (
 from .services import (
     html_to_markdown,
     normalize_source_markdown_path,
-    resolve_article_markdown_dir,
 )
 
 HOME_SUMMARY_CACHE_KEY = "home:summary:v4"
@@ -129,6 +128,64 @@ def _sanitize_category_path_segment(name: str, *, fallback: str) -> str:
     if not value or value in {".", ".."}:
         return fallback
     return value
+
+
+def _sanitize_article_title_segment(title: str, *, fallback: str = "article") -> str:
+    value = (title or "").strip().replace("\\", "/")
+    value = value.replace("/", "_")
+    if not value or value in {".", ".."}:
+        return fallback
+    return value
+
+
+def _category_lineage_segments(category: Category | None) -> list[str]:
+    if category is None:
+        return ["uncategorized"]
+    lineage: list[str] = []
+    cursor: Category | None = category
+    while cursor is not None:
+        lineage.append(
+            _sanitize_category_path_segment(
+                cursor.name,
+                fallback=f"category_{cursor.id}",
+            )
+        )
+        cursor = cursor.parent
+    lineage.reverse()
+    return lineage or ["uncategorized"]
+
+
+def _build_article_archive_markdown_path(*, title: str, category: Category | None) -> tuple[Path, str]:
+    title_segment = _sanitize_article_title_segment(title, fallback="article")
+    rel = Path("temp") / Path(*_category_lineage_segments(category)) / f"{title_segment}.md"
+    destination = Path(settings.BASE_DIR) / "static" / rel
+    source_markdown_path = f"/static/{rel.as_posix()}"
+    return destination, source_markdown_path
+
+
+def _build_article_archive_image_path(*, title: str, category: Category | None, suffix: str) -> tuple[Path, str]:
+    title_segment = _sanitize_article_title_segment(title, fallback="article")
+    ext = (suffix or "").lower()
+    if not ext.startswith("."):
+        ext = f".{ext}" if ext else ""
+    if not ext:
+        ext = ".png"
+    rel = Path("temp") / Path(*_category_lineage_segments(category)) / "img" / f"{title_segment}{ext}"
+    destination = Path(settings.BASE_DIR) / "static" / rel
+    cover_path = f"/static/{rel.as_posix()}"
+    return destination, cover_path
+
+
+def _persist_article_markdown_archive(article: Article) -> None:
+    destination, source_markdown_path = _build_article_archive_markdown_path(
+        title=article.title,
+        category=article.category,
+    )
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_text(article.markdown_content or "", encoding="utf-8")
+    if article.source_markdown_path != source_markdown_path:
+        article.source_markdown_path = source_markdown_path
+        article.save(update_fields=["source_markdown_path", "updated_at"])
 
 
 def _category_icon_path(uploaded_file, *, category: Category) -> str:
@@ -649,18 +706,20 @@ class AdminArticleViewSet(viewsets.ModelViewSet):
         payload.setdefault("author", request.user.id)
         serializer = self.get_serializer(data=payload)
         serializer.is_valid(raise_exception=True)
-        self.perform_create(serializer)
+        article = serializer.save()
+        _persist_article_markdown_archive(article)
         invalidate_public_cache()
-        return success_response(data=serializer.data, message="created")
+        return success_response(data=self.get_serializer(article).data, message="created")
 
     def update(self, request, *args, **kwargs):
         partial = kwargs.pop("partial", False)
         instance = self.get_object()
         serializer = self.get_serializer(instance, data=request.data, partial=partial)
         serializer.is_valid(raise_exception=True)
-        serializer.save()
+        article = serializer.save()
+        _persist_article_markdown_archive(article)
         invalidate_public_cache()
-        return success_response(data=serializer.data, message="updated")
+        return success_response(data=self.get_serializer(article).data, message="updated")
 
     def destroy(self, request, *args, **kwargs):
         instance = self.get_object()
@@ -712,30 +771,21 @@ class AdminArticleViewSet(viewsets.ModelViewSet):
         text_content = _decode_uploaded_text(markdown_file)
         markdown_content = html_to_markdown(text_content) if suffix in {".html", ".htm"} else text_content
 
-        source_markdown_path = str(request.data.get("source_markdown_path") or "").strip()
-        if source_markdown_path:
+        if str(request.data.get("source_markdown_path") or "").strip():
+            return error_response(message="禁止传 source_markdown_path，路径由后端自动归档", code=400)
+        title = str(request.data.get("title") or "").strip()
+        if not title:
+            return error_response(message="请传 title（文章标题）", code=400)
+        category_id_raw = request.data.get("category")
+        category: Category | None = None
+        if category_id_raw not in {None, ""}:
             try:
-                normalized_source = normalize_source_markdown_path(source_markdown_path)
-            except ValueError as exc:
-                return error_response(message=str(exc), code=400)
-            if not normalized_source.lower().endswith(".md"):
-                normalized_source = f"{normalized_source}.md"
-        else:
-            date_dir = timezone.now().strftime("%Y%m%d")
-            stem = slugify(Path(markdown_file.name).stem) or "article"
-            normalized_source = f"/static/temp/uploads/{date_dir}/{stem}.md"
+                category = Category.objects.get(id=int(category_id_raw))
+            except (Category.DoesNotExist, ValueError, TypeError):
+                return error_response(message="category 无效", code=400)
 
-        try:
-            destination = _resolve_source_markdown_absolute_path(normalized_source)
-        except ValueError as exc:
-            return error_response(message=str(exc), code=400)
-
+        destination, normalized_source = _build_article_archive_markdown_path(title=title, category=category)
         destination.parent.mkdir(parents=True, exist_ok=True)
-        destination = _ensure_unique_path(destination)
-        if destination.name != Path(normalized_source).name:
-            rel = destination.relative_to(Path(settings.BASE_DIR) / "static" / "temp").as_posix()
-            normalized_source = f"/static/temp/{rel}"
-
         destination.write_text(markdown_content, encoding="utf-8")
         return success_response(
             data={
@@ -756,31 +806,28 @@ class AdminArticleViewSet(viewsets.ModelViewSet):
         if cover_file is None:
             return error_response(message="请上传 cover_file 文件", code=400)
 
-        source_markdown_path = str(request.data.get("source_markdown_path") or "").strip()
-        safe_name = _sanitize_upload_file_name(cover_file.name, default_stem="cover")
-
-        if source_markdown_path:
+        if str(request.data.get("source_markdown_path") or "").strip():
+            return error_response(message="禁止传 source_markdown_path，路径由后端自动归档", code=400)
+        title = str(request.data.get("title") or "").strip()
+        if not title:
+            return error_response(message="请传 title（文章标题）", code=400)
+        category_id_raw = request.data.get("category")
+        category: Category | None = None
+        if category_id_raw not in {None, ""}:
             try:
-                image_dir, normalized_source = resolve_article_markdown_dir(source_markdown_path)
-            except ValueError as exc:
-                return error_response(message=str(exc), code=400)
-            image_dir.mkdir(parents=True, exist_ok=True)
-            destination = _ensure_unique_path(image_dir / safe_name)
-            with destination.open("wb") as output:
-                for chunk in cover_file.chunks():
-                    output.write(chunk)
-            article_dir = normalize_source_markdown_path(normalized_source).rsplit("/", 1)[0]
-            cover_path = f"{article_dir}/img/{destination.name}"
-        else:
-            date_dir = timezone.now().strftime("%Y%m%d")
-            cover_dir = Path(settings.BASE_DIR) / "static" / "temp" / "uploads" / "cover" / date_dir
-            cover_dir.mkdir(parents=True, exist_ok=True)
-            destination = _ensure_unique_path(cover_dir / safe_name)
-            with destination.open("wb") as output:
-                for chunk in cover_file.chunks():
-                    output.write(chunk)
-            rel_to_static = destination.relative_to(Path(settings.BASE_DIR) / "static").as_posix()
-            cover_path = f"/static/{rel_to_static}"
+                category = Category.objects.get(id=int(category_id_raw))
+            except (Category.DoesNotExist, ValueError, TypeError):
+                return error_response(message="category 无效", code=400)
+
+        destination, cover_path = _build_article_archive_image_path(
+            title=title,
+            category=category,
+            suffix=Path(cover_file.name).suffix.lower(),
+        )
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        with destination.open("wb") as output:
+            for chunk in cover_file.chunks():
+                output.write(chunk)
 
         return success_response(
             data={
@@ -1084,8 +1131,10 @@ class AdminMediaUploadAPIView(APIView):
             return error_response(message=str(exc), code=400, status_code=status.HTTP_400_BAD_REQUEST)
 
         target_dir.mkdir(parents=True, exist_ok=True)
-        safe_name = Path(upload_file.name).name or "upload.bin"
-        destination = _ensure_unique_path(target_dir / safe_name)
+        preferred_name = str(request.data.get("filename") or "").strip()
+        safe_name = Path(preferred_name).name if preferred_name else (Path(upload_file.name).name or "upload.bin")
+        overwrite = _bool_from_value(request.data.get("overwrite"), default=False)
+        destination = target_dir / safe_name if overwrite else _ensure_unique_path(target_dir / safe_name)
         with destination.open("wb") as output:
             for chunk in upload_file.chunks():
                 output.write(chunk)

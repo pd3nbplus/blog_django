@@ -235,13 +235,55 @@ python manage.py migrate_source_markdown_path_to_static_temp --dry-run
 python manage.py migrate_source_markdown_path_to_static_temp
 ```
 
-## 10. 生产运行与部署
+## 10. 静态资源上传归档规范（2026-03）
+
+### 10.1 文章（新建/编辑页）
+
+- 前端不再要求或允许手填 `source_markdown_path`，归档路径由后端按“分类层级 + 文章标题”自动计算。
+- 文章保存（创建/更新）时，后端会将正文落盘到：
+  - `<BASE_DIR>/static/temp/<分类层级>/<文章标题>.md`
+- 文章封面上传接口 `POST /api/v1/admin/articles/upload-cover/` 归档到：
+  - `<BASE_DIR>/static/temp/<分类层级>/img/<文章标题>.<图片后缀>`
+- 文章 Markdown 上传接口 `POST /api/v1/admin/articles/upload-markdown/` 归档到：
+  - `<BASE_DIR>/static/temp/<分类层级>/<文章标题>.md`
+- `upload-markdown` / `upload-cover` 入参要求：
+  - 必传 `title`，可选 `category`
+  - 禁止传 `source_markdown_path`，传入会返回 `400`
+- 新版文章编辑器采用“选完文件，点击发布再统一上传”的流程：
+  - Markdown：前端先本地读取，发布时由文章保存动作统一落盘。
+  - 封面：发布前调用 `upload-cover` 上传，成功后再提交文章数据。
+- 若新建文章时仅在“封面路径”输入链接（`http/https`）且未选择本地图片文件，则不会在本地保存图片，只会保存数据库字段 `cover_path`。
+
+### 10.2 合集封面
+
+- 合集封面仍走 `POST /api/v1/admin/media/upload/`，路径归一化规则保持不变：
+  - `temp/uploads/collection-cover` => `temp/collection`
+- 约定文件命名为 `<合集名称>.<后缀>`，并使用 `overwrite=1` 覆盖同名文件（修改图片直接覆盖）。
+- 实际落盘：
+  - `<BASE_DIR>/static/temp/collection/<合集名称>.<后缀>`
+
+### 10.3 分类与媒体库
+
+- 分类图标上传（`icon_file`）与媒体库常规上传行为保持不变。
+- 媒体库上传接口新增可选参数：
+  - `filename`：指定保存文件名（默认仍为上传文件原名）
+  - `overwrite`：`1/true` 时覆盖同名文件（默认关闭，保持“重名自动加后缀”）
+
+### 10.4 当前落地情况摘要
+
+- 已实现：文章自动归档、封面归档、合集封面固定命名覆盖。
+- 已保持不变：分类图标上传路径规则、媒体库默认上传行为。
+- 现状说明：
+  - `Article.source_markdown_path` 字段仍保留，但由后端归档流程统一生成并回填，不依赖前端传值。
+  - `/api/v1/admin/articles/resolve-local-images/` 仍为 no-op，不会把本地引用图片落盘。
+
+## 11. 生产运行与部署
 
 - 生产 settings：`config.settings.prod`
 - 建议流程：`migrate` -> `collectstatic` -> Gunicorn -> Nginx
 - 详细命令版部署流程见：`部署文档.md`
 
-## 11. 兼容说明
+## 12. 兼容说明
 
 - 当前生效配置入口为 `config/*`。
 - `blog_project/settings.py` 仅作历史兼容入口，不建议新代码继续依赖。

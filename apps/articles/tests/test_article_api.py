@@ -5,6 +5,7 @@ from datetime import timedelta
 from pathlib import Path
 from unittest.mock import patch
 
+from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core.cache import cache
 from django.core.files.uploadedfile import SimpleUploadedFile
@@ -358,7 +359,58 @@ class ArticleAPITestCase(APITestCase):
 
         self.assertFalse(Article.objects.filter(id=self.published_article.id).exists())
 
-    def test_admin_upload_markdown_defaults_to_static_temp(self) -> None:
+    def test_admin_create_article_persists_markdown_archive_by_category_and_title(self) -> None:
+        self.client.force_authenticate(user=self.admin)
+        response = self.client.post(
+            "/api/v1/admin/articles/",
+            {
+                "title": "归档测试",
+                "slug": "archive-spec-demo",
+                "summary": "summary",
+                "markdown_content": "# Archive\n\ncontent",
+                "category": self.child_category.id,
+                "status": Article.Status.DRAFT,
+            },
+            format="json",
+        )
+        assert_success_envelope(self, response)
+
+        article_id = response.data["data"]["id"]
+        article = Article.objects.get(id=article_id)
+        expected_source_path = "/static/temp/Root/Child/归档测试.md"
+        self.assertEqual(article.source_markdown_path, expected_source_path)
+
+        saved_file = Path(settings.BASE_DIR) / "static" / "temp" / "Root" / "Child" / "归档测试.md"
+        self.assertTrue(saved_file.exists())
+        self.assertEqual(saved_file.read_text(encoding="utf-8"), "# Archive\n\ncontent")
+        saved_file.unlink(missing_ok=True)
+
+    def test_admin_create_article_with_cover_url_does_not_persist_local_cover_file(self) -> None:
+        self.client.force_authenticate(user=self.admin)
+        response = self.client.post(
+            "/api/v1/admin/articles/",
+            {
+                "title": "链接封面测试",
+                "slug": "cover-url-no-local-file",
+                "summary": "summary",
+                "markdown_content": "# Content",
+                "category": self.child_category.id,
+                "cover_path": "https://example.com/assets/cover.png",
+                "status": Article.Status.DRAFT,
+            },
+            format="json",
+        )
+        assert_success_envelope(self, response)
+
+        article = Article.objects.get(id=response.data["data"]["id"])
+        self.assertEqual(article.cover_path, "https://example.com/assets/cover.png")
+        local_cover = Path(settings.BASE_DIR) / "static" / "temp" / "Root" / "Child" / "img" / "链接封面测试.png"
+        self.assertFalse(local_cover.exists())
+
+        markdown_file = Path(settings.BASE_DIR) / "static" / "temp" / "Root" / "Child" / "链接封面测试.md"
+        markdown_file.unlink(missing_ok=True)
+
+    def test_admin_upload_markdown_archives_by_category_and_title(self) -> None:
         self.client.force_authenticate(user=self.admin)
         markdown_file = SimpleUploadedFile(
             "new-upload.md",
@@ -367,20 +419,24 @@ class ArticleAPITestCase(APITestCase):
         )
         response = self.client.post(
             "/api/v1/admin/articles/upload-markdown/",
-            {"markdown_file": markdown_file},
+            {
+                "markdown_file": markdown_file,
+                "title": "测试标题",
+                "category": self.child_category.id,
+            },
             format="multipart",
         )
         assert_success_envelope(self, response)
 
         payload = response.data["data"]
-        self.assertTrue(payload["source_markdown_path"].startswith("/static/temp/uploads/"))
+        self.assertEqual(payload["source_markdown_path"], "/static/temp/Root/Child/测试标题.md")
         saved_to = Path(payload["saved_to"])
         self.assertTrue(saved_to.exists())
         self.assertEqual(saved_to.read_text(encoding="utf-8"), "# Demo\n\ncontent")
 
         saved_to.unlink(missing_ok=True)
 
-    def test_admin_upload_markdown_rejects_media_articles_root(self) -> None:
+    def test_admin_upload_markdown_rejects_source_path_parameter(self) -> None:
         self.client.force_authenticate(user=self.admin)
         markdown_file = SimpleUploadedFile(
             "legacy.md",
@@ -391,6 +447,7 @@ class ArticleAPITestCase(APITestCase):
             "/api/v1/admin/articles/upload-markdown/",
             {
                 "markdown_file": markdown_file,
+                "title": "标题",
                 "source_markdown_path": "/media/articles/uploads/legacy.md",
             },
             format="multipart",
@@ -398,30 +455,9 @@ class ArticleAPITestCase(APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertEqual(response.data["code"], 400)
-        self.assertIn("不再支持 /media/articles", response.data["message"])
+        self.assertIn("禁止传 source_markdown_path", response.data["message"])
 
-    def test_admin_upload_cover_defaults_to_static_temp(self) -> None:
-        self.client.force_authenticate(user=self.admin)
-        cover_file = SimpleUploadedFile(
-            "cover.png",
-            b"fake-png-content",
-            content_type="image/png",
-        )
-        response = self.client.post(
-            "/api/v1/admin/articles/upload-cover/",
-            {"cover_file": cover_file},
-            format="multipart",
-        )
-        assert_success_envelope(self, response)
-
-        payload = response.data["data"]
-        self.assertTrue(payload["cover_path"].startswith("/static/temp/uploads/cover/"))
-        saved_to = Path(payload["saved_to"])
-        self.assertTrue(saved_to.exists())
-
-        saved_to.unlink(missing_ok=True)
-
-    def test_admin_upload_cover_rejects_media_articles_root(self) -> None:
+    def test_admin_upload_cover_archives_by_category_and_title(self) -> None:
         self.client.force_authenticate(user=self.admin)
         cover_file = SimpleUploadedFile(
             "cover.png",
@@ -432,6 +468,32 @@ class ArticleAPITestCase(APITestCase):
             "/api/v1/admin/articles/upload-cover/",
             {
                 "cover_file": cover_file,
+                "title": "测试标题",
+                "category": self.child_category.id,
+            },
+            format="multipart",
+        )
+        assert_success_envelope(self, response)
+
+        payload = response.data["data"]
+        self.assertEqual(payload["cover_path"], "/static/temp/Root/Child/img/测试标题.png")
+        saved_to = Path(payload["saved_to"])
+        self.assertTrue(saved_to.exists())
+
+        saved_to.unlink(missing_ok=True)
+
+    def test_admin_upload_cover_rejects_source_path_parameter(self) -> None:
+        self.client.force_authenticate(user=self.admin)
+        cover_file = SimpleUploadedFile(
+            "cover.png",
+            b"fake-png-content",
+            content_type="image/png",
+        )
+        response = self.client.post(
+            "/api/v1/admin/articles/upload-cover/",
+            {
+                "cover_file": cover_file,
+                "title": "标题",
                 "source_markdown_path": "/media/articles/uploads/legacy.md",
             },
             format="multipart",
@@ -439,7 +501,7 @@ class ArticleAPITestCase(APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertEqual(response.data["code"], 400)
-        self.assertIn("不再支持 /media/articles", response.data["message"])
+        self.assertIn("禁止传 source_markdown_path", response.data["message"])
 
     def test_admin_resolve_local_images_is_noop(self) -> None:
         self.client.force_authenticate(user=self.admin)

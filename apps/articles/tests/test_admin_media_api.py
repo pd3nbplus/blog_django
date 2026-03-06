@@ -115,3 +115,47 @@ class AdminMediaAPITestCase(APITestCase):
         saved_file = Path(settings.BASE_DIR) / "static" / payload["path"] / payload["name"]
         self.assertTrue(saved_file.exists())
         saved_file.unlink(missing_ok=True)
+
+    def test_admin_media_upload_supports_overwrite_with_filename(self) -> None:
+        first_file = SimpleUploadedFile(
+            name="cover-a.png",
+            content=b"v1",
+            content_type="image/png",
+        )
+        second_file = SimpleUploadedFile(
+            name="cover-b.png",
+            content=b"v2",
+            content_type="image/png",
+        )
+
+        first_response = self.client.post(
+            "/api/v1/admin/media/upload/",
+            {
+                "path": "temp/uploads/collection-cover",
+                "file": first_file,
+                "filename": "My Collection.png",
+                "overwrite": "1",
+            },
+            format="multipart",
+        )
+        assert_success_envelope(self, first_response)
+
+        second_response = self.client.post(
+            "/api/v1/admin/media/upload/",
+            {
+                "path": "temp/uploads/collection-cover",
+                "file": second_file,
+                "filename": "My Collection.png",
+                "overwrite": "1",
+            },
+            format="multipart",
+        )
+        assert_success_envelope(self, second_response)
+
+        payload = second_response.data["data"]
+        self.assertEqual(payload["path"], "temp/collection")
+        self.assertEqual(payload["name"], "My Collection.png")
+        saved_file = Path(settings.BASE_DIR) / "static" / payload["path"] / payload["name"]
+        self.assertTrue(saved_file.exists())
+        self.assertEqual(saved_file.read_bytes(), b"v2")
+        saved_file.unlink(missing_ok=True)
